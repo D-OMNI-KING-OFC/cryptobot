@@ -1,0 +1,63 @@
+modules = ["nodejs-20"]
+[agent]
+expertMode = true
+
+[nix]
+channel = "stable-25_05"
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Start application"
+
+[[workflows.workflow]]
+name = "Start application"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npm run dev"
+waitForPort = 5000
+
+[workflows.workflow.metadata]
+outputType = "webview"
+
+[[ports]]
+localPort = 3001
+externalPort = 3001
+
+[[ports]]
+localPort = 5000
+externalPort = 80
+
+[[ports]]
+localPort = 5001
+externalPort = 3002
+
+[[ports]]
+localPort = 5002
+externalPort = 3000
+
+[[ports]]
+localPort = 5003
+externalPort = 4200
+
+[deployment]
+deploymentTarget = "autoscale"
+run = ["node", "server/index.js"]
+build = ["npm", "run", "build"]
+
+[userenv]
+
+[userenv.shared]
+VITE_COINGECKO_API_KEY = "CG-umeT2FcD7TxSszXTiLmY3cXj"
+VITE_FRED_API_KEY = "56f0d300fce550376a333e4e10e0b4e0"
+VITE_ALTERNATIVE_ME_ENDPOINT = "https://api.alternative.me/fng/"
+SANBASE_API_KEY = "d5xauyzzbudqxfh6_qujfn3b4wgfim7jo"

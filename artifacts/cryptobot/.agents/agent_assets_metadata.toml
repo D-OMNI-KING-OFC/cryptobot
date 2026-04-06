@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "LUDQQy_fonOLNjeeOAape"
+uri = "file://VERCEL_DEPLOY.md"
+type = "text"
+title = "Vercel Deployment Guide"
