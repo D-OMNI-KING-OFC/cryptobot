@@ -64,14 +64,12 @@ export async function fetchGlobalMarketData(): Promise<{
 
 /**
  * Fetch social sentiment from Sanbase (primary + only source).
- * LunarCrush has been removed — it requires a paid plan (402).
  */
 async function fetchSanbaseSentiment(symbol: string): Promise<{ socialSentimentScore: number; socialVolume24h: number | null }> {
   const res = await fetch(`/api/sanbase/sentiment/${symbol.toUpperCase()}`);
   if (!res.ok) throw new Error(`Sanbase sentiment error: ${res.status}`);
   const data = await res.json();
   if (data.source === 'sanbase_unavailable') {
-    // Sanbase returned its own fallback — propagate as zeros, not an error
     return { socialSentimentScore: 0, socialVolume24h: 0 };
   }
   return {
@@ -148,16 +146,16 @@ export async function fetchMacroSentiment(assetSymbol: string = 'BTC'): Promise<
     ? social.value
     : (() => { console.warn('Sanbase sentiment fetch failed:', (social as PromiseRejectedResult).reason?.message); return { socialSentimentScore: 0, socialVolume24h: null }; })();
 
-  // News: CoinTelegraph RSS
+  // News: multi-source (CoinTelegraph + Decrypt + CoinDesk)
   const newsItems = news.status === 'fulfilled'
     ? news.value
     : (() => { console.warn('News fetch failed:', (news as PromiseRejectedResult).reason?.message); return [] as NewsItem[]; })();
 
-  // DXY: FRED proxy — throw so React Query retries if server not ready
-  if (dxyData.status === 'rejected') {
-    throw dxyData.reason;
-  }
-  const dxy = dxyData.value;
+  // DXY: GRACEFUL degradation — null means unavailable, not a fatal error.
+  // The analysis will receive null DXY and Claude will note the data gap.
+  const dxy = dxyData.status === 'fulfilled'
+    ? dxyData.value
+    : (() => { console.warn('DXY fetch failed:', (dxyData as PromiseRejectedResult).reason?.message); return { value: null as number | null, trend: 'neutral' as const }; })();
 
   // Interest rate: FRED proxy — neutral fallback on failure
   const rateExpectation = rateData.status === 'fulfilled'
@@ -177,7 +175,7 @@ export async function fetchMacroSentiment(assetSymbol: string = 'BTC'): Promise<
     btcDominance: gd.btcDominance,
     totalMarketCap: gd.totalMarketCap,
     total2MarketCap: gd.total2MarketCap,
-    dxy: dxy.value,
+    dxy: dxy.value as number,  // null is valid here; handled in payload builder
     dxyTrend: dxy.trend,
     interestRateExpectation: rateExpectation,
     globalLiquidityTrend,

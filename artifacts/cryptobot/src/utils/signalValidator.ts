@@ -15,20 +15,27 @@ export interface InstitutionalValidationSettings {
   phaseAlignmentMinimum: number;
 }
 
-// Institutional-grade validation settings
+// Institutional-grade validation settings — calibrated to master prompt's
+// "not too strict, not too loose" human-judgment philosophy.
+// These are SAFETY NETS only. Claude's judgment takes precedence on edge cases.
 const INSTITUTIONAL_SETTINGS: InstitutionalValidationSettings = {
   minConfidenceThreshold: 55,
   maxSlPercentMajorCaps: 8,      // BTC, ETH, SOL, BNB, XRP
   maxSlPercentAltcoins: 15,      // All other assets
   minRR: 2.0,
-  fundingRateCrowdedThreshold: 0.05,
-  fundingRateExtremeThreshold: 0.10,
+  fundingRateCrowdedThreshold: 0.0005,   // 0.05% in decimal (NOT 0.05 — funding rates are already in decimal)
+  fundingRateExtremeThreshold: 0.0010,   // 0.10% in decimal
   dxyHeadwindThreshold: 102,
   tokenUnlockDaysThreshold: 7,
-  tokenUnlockSupplyThreshold: 10,  // 10% of circulating supply
+  tokenUnlockSupplyThreshold: 10,        // 10% of circulating supply
   newsEventHoursThreshold: 12,
+  // MTF score: master prompt says |score| > 0.30 required
+  // Use < (strict less than) so exactly 0.30 is a valid signal — not blocked
   mtfScoreThreshold: 0.30,
-  phaseAlignmentMinimum: 3
+  // Phase alignment: master prompt explicitly states "2/4 phases CAN generate a
+  // signal with an exceptional entry trigger and clean setup". The validator is a
+  // SAFETY NET, not a filter stricter than Claude. Use 2 as the minimum.
+  phaseAlignmentMinimum: 2
 };
 
 export function validateInstitutionalSignal(signal: AnalysisOutput, data: any): ValidationResult {
@@ -37,15 +44,16 @@ export function validateInstitutionalSignal(signal: AnalysisOutput, data: any): 
 
   // ─── MANDATORY NO_TRADE CONDITIONS ──────────────────────────────────────
 
-  // 1. Phase alignment minimum
+  // 1. Phase alignment minimum — requires at least 2 phases aligned
+  //    (master prompt: 2/4 OK with clean trigger; 3+/4 preferred)
   const phaseCount = countPhaseAlignment(signal);
   if (phaseCount < INSTITUTIONAL_SETTINGS.phaseAlignmentMinimum) {
-    errors.push(`Only ${phaseCount}/4 phases aligned toward trade direction — insufficient confluence`);
+    errors.push(`Only ${phaseCount}/4 phases aligned toward trade direction — insufficient confluence for any signal`);
   }
 
-  // 2. MTF confluence score threshold
-  if (Math.abs(signal.phase5?.mtfConfluenceScore || 0) <= INSTITUTIONAL_SETTINGS.mtfScoreThreshold) {
-    errors.push(`MTF confluence score in neutral zone (|${signal.phase5?.mtfConfluenceScore?.toFixed(2)}| ≤ ${INSTITUTIONAL_SETTINGS.mtfScoreThreshold}) — insufficient directional alignment`);
+  // 2. MTF confluence score threshold — uses < (not <=) so exactly 0.30 is valid
+  if (Math.abs(signal.phase5?.mtfConfluenceScore || 0) < INSTITUTIONAL_SETTINGS.mtfScoreThreshold) {
+    errors.push(`MTF confluence score in neutral zone (|${signal.phase5?.mtfConfluenceScore?.toFixed(2)}| < ${INSTITUTIONAL_SETTINGS.mtfScoreThreshold}) — insufficient directional alignment`);
   }
 
   // 3. Confidence threshold
@@ -84,18 +92,24 @@ export function validateInstitutionalSignal(signal: AnalysisOutput, data: any): 
 
   // ─── CONDITIONAL VALIDATION (warnings, not blocking) ───────────────────
 
-  // Funding rate warnings
+  // Funding rate warnings — thresholds calibrated to master prompt:
+  //   0.01-0.03% = normal, 0.03-0.05% = elevated, >0.05% = crowded, >0.10% = extreme
+  //   Funding rate comes in as decimal: 0.01% = 0.0001
   if (signal.bias === 'LONG') {
-    if ((data.fundingRate || 0) > INSTITUTIONAL_SETTINGS.fundingRateExtremeThreshold) {
-      warnings.push('EXTREME WARNING: Funding rate >0.10% — entering extremely crowded long position, liquidation cascade risk elevated');
-    } else if ((data.fundingRate || 0) > INSTITUTIONAL_SETTINGS.fundingRateCrowdedThreshold) {
-      warnings.push('WARNING: Funding rate >0.05% — longs are crowded, reduce position size');
+    const fr = data.fundingRate;
+    if (fr !== null && fr !== undefined) {
+      if (fr > INSTITUTIONAL_SETTINGS.fundingRateExtremeThreshold) {
+        warnings.push('EXTREME WARNING: Funding rate >0.10% — entering extremely crowded long position, liquidation cascade risk elevated');
+      } else if (fr > INSTITUTIONAL_SETTINGS.fundingRateCrowdedThreshold) {
+        warnings.push('WARNING: Funding rate >0.05% — longs are crowded, reduce position size');
+      }
     }
   }
 
-  // DXY headwind
-  if (signal.bias === 'LONG' && (data.dxy || 100) > INSTITUTIONAL_SETTINGS.dxyHeadwindThreshold) {
-    warnings.push(`DXY at ${(data.dxy || 100).toFixed(1)} — significant headwind for risk-on assets`);
+  // DXY headwind — only warn if we have a real DXY reading (not null/0)
+  const dxy = data.dxy;
+  if (signal.bias === 'LONG' && dxy && dxy > INSTITUTIONAL_SETTINGS.dxyHeadwindThreshold) {
+    warnings.push(`DXY at ${dxy.toFixed(1)} — significant headwind for risk-on assets`);
   }
 
   // Fear & Greed context
@@ -117,7 +131,6 @@ export function validateInstitutionalSignal(signal: AnalysisOutput, data: any): 
 
   // ─── PHASE CONFLICT DETECTION ──────────────────────────────────────────
 
-  // HTF vs LTF conflict
   if (signal.phase3?.htfBias && signal.phase4?.ltfBias) {
     const htfDirection = signal.phase3.htfBias.toLowerCase();
     const ltfDirection = signal.phase4.ltfBias.toLowerCase();
@@ -131,11 +144,14 @@ export function validateInstitutionalSignal(signal: AnalysisOutput, data: any): 
   // ─── RESULT COMPILATION ─────────────────────────────────────────────────
 
   const isValid = errors.length === 0 || signal.bias === 'NO_TRADE';
-  const overrideToNoTrade = errors.some(e => e.includes('insufficient') ||
-                                             e.includes('below') ||
-                                             e.includes('exceeds') ||
-                                             e.includes('cannot execute') ||
-                                             e.includes('extreme bearish'));
+  const overrideToNoTrade = errors.some(e =>
+    e.includes('insufficient confluence for any signal') ||
+    e.includes('MTF confluence score in neutral zone') ||
+    e.includes('below') ||
+    e.includes('exceeds') ||
+    e.includes('cannot execute') ||
+    e.includes('extreme bearish')
+  );
 
   return {
     isValid,
@@ -186,13 +202,10 @@ function getSLHardCap(pair: string): number {
 
 // ─── LEGACY COMPATIBILITY FUNCTIONS ──────────────────────────────────────
 
-export function validateSignal(signal: AnalysisOutput, settings?: any): ValidationResult {
-  // For backward compatibility, call the new institutional validator
+export function validateSignal(signal: AnalysisOutput, _settings?: any): ValidationResult {
   return validateInstitutionalSignal(signal, {});
 }
 
-export function applyCommonSenseRules(signal: AnalysisOutput, context: any): AnalysisOutput {
-  // Legacy function - now handled in the main validation
+export function applyCommonSenseRules(signal: AnalysisOutput, _context: any): AnalysisOutput {
   return signal;
 }
-

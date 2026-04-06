@@ -414,18 +414,20 @@ async function computeCorrelations(pair: string, targetCloses: number[]): Promis
   }
 
   try {
+    // Route through server proxy to avoid Binance geo-blocking.
+    // /api/binance/spot/klines proxies through Kraken automatically.
     const [btcCandles, ethCandles] = await Promise.allSettled([
-      fetch(`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1d&limit=30`).then(r => r.json()),
-      fetch(`https://api.binance.com/api/v3/klines?symbol=ETHUSDT&interval=1d&limit=30`).then(r => r.json()),
+      fetch(`/api/binance/spot/klines?symbol=BTCUSDT&interval=1d&limit=30`).then(r => r.json()),
+      fetch(`/api/binance/spot/klines?symbol=ETHUSDT&interval=1d&limit=30`).then(r => r.json()),
     ]);
 
     const correlations: Record<string, number> = {};
 
-    if (btcCandles.status === 'fulfilled' && Array.isArray(btcCandles.value)) {
+    if (btcCandles.status === 'fulfilled' && Array.isArray(btcCandles.value) && btcCandles.value.length > 0) {
       const btcCloses = btcCandles.value.map((k: unknown[]) => parseFloat(k[4] as string));
       correlations['BTC'] = computePearsonCorrelation(targetCloses.slice(-30), btcCloses);
     }
-    if (ethCandles.status === 'fulfilled' && Array.isArray(ethCandles.value)) {
+    if (ethCandles.status === 'fulfilled' && Array.isArray(ethCandles.value) && ethCandles.value.length > 0) {
       const ethCloses = ethCandles.value.map((k: unknown[]) => parseFloat(k[4] as string));
       correlations['ETH'] = computePearsonCorrelation(targetCloses.slice(-30), ethCloses);
     }
@@ -438,18 +440,21 @@ async function computeCorrelations(pair: string, targetCloses: number[]): Promis
 
 // ─── Long/Short Ratio ─────────────────────────────────────────────────────────
 
-async function fetchLongShortRatio(pair: string): Promise<number> {
+async function fetchLongShortRatio(pair: string): Promise<number | null> {
   try {
     const symbol = pair.replace('/', '');
     const res = await fetch(`/api/binance/lsratio/${symbol}`);
     if (!res.ok) throw new Error(`LS ratio error: ${res.status}`);
     const data = await res.json();
     if (Array.isArray(data) && data.length > 0) {
-      return parseFloat(data[0].longShortRatio);
+      const ratio = data[0].longShortRatio;
+      // Proxy returns null when Binance is geo-blocked — propagate as null, not fake 1.0
+      if (ratio === null || ratio === undefined) return null;
+      return parseFloat(ratio);
     }
-    return 1.0;
+    return null;
   } catch {
-    return 1.0;
+    return null;
   }
 }
 
@@ -563,19 +568,28 @@ export function useAnalysisEngine() {
       // ── PHASE 2: On-Chain & Fundamentals ───────────────────────────────────
       store.setPhaseProgress('phase2', 'running');
 
-      const [onChainRes, fundingRateRes, oiDataRes, lsRatioRes, oiChange24hRes] = await Promise.allSettled([
+      const [onChainRes, fundingRateRes, oiDataRes, lsRatioRes, oiChange24hRes, etfFlowRes] = await Promise.allSettled([
         fetchOnChainMetrics(symbol),
         fetchFundingRate(pair),
         fetchOpenInterest(pair),
         fetchLongShortRatio(pair),
         fetchOIChange24h(pair),
+        // ETF flows: BTC/ETH only (spot ETF data from Farside Investors)
+        (symbol === 'BTC' || symbol === 'ETH')
+          ? fetch('/api/etf/flows').then(r => r.ok ? r.json() : null)
+          : Promise.resolve(null),
       ]);
 
       const onChainData = onChainRes.status === 'fulfilled' ? onChainRes.value : null;
-      const fr = fundingRateRes.status === 'fulfilled' ? fundingRateRes.value : 0;
+      // null = Binance geo-blocked / unavailable — propagate as null throughout, NOT as fake neutral values
+      const fr = fundingRateRes.status === 'fulfilled' ? fundingRateRes.value : null;
       const oi = oiDataRes.status === 'fulfilled' ? oiDataRes.value : { oi: null, change24h: 0 };
-      const lsRatio = lsRatioRes.status === 'fulfilled' ? lsRatioRes.value : 1.0;
+      const lsRatio = lsRatioRes.status === 'fulfilled' ? lsRatioRes.value : null;
       const oiChange24h = oiChange24hRes.status === 'fulfilled' ? oiChange24hRes.value : 0;
+      // ETF flows from Farside Investors (BTC/ETH only; null for other assets)
+      const etfFlowData = etfFlowRes.status === 'fulfilled' ? etfFlowRes.value : null;
+      const etfNetFlow24h: number | null = etfFlowData?.btcFlows?.daily ?? null;
+      const etfNetFlowWeekly: number | null = etfFlowData?.btcFlows?.weekly ?? null;
 
       store.setPhaseProgress('phase2', 'complete');
 
@@ -646,8 +660,16 @@ export function useAnalysisEngine() {
       // ── PHASE 5: Synthesis — send to Claude ─────────────────────────────
       store.setPhaseProgress('phase5', 'running');
 
+      // Funding rate thresholds calibrated to master prompt:
+      //   0.01%–0.03% (0.0001–0.0003) = Normal
+      //   >0.05%      (>0.0005)         = Overheated longs (crowded)
+      //   <-0.03%     (<-0.0003)        = Overheated shorts
+      //   null                          = Binance geo-blocked — unavailable
       const fundingRateStatus: 'neutral' | 'overheated_long' | 'overheated_short' | 'unavailable' =
-        fr === null ? 'unavailable' : fr > 0.001 ? 'overheated_long' : fr < -0.001 ? 'overheated_short' : 'neutral';
+        fr === null ? 'unavailable'
+        : fr > 0.0005 ? 'overheated_long'
+        : fr < -0.0003 ? 'overheated_short'
+        : 'neutral';
 
       // Validate we have enough data
       const availableTimeframes = [c15m, c1h, c4h, c1d, c1w].filter(c => c.length > 0).length;
@@ -712,7 +734,8 @@ export function useAnalysisEngine() {
         oiChange24h,
         longShortRatio: lsRatio,
         liquidationLevels: JSON.stringify([]),
-        dxy: macroData?.dxy || 0,
+        // Use ?? null so a legitimate dxy of 0 would still propagate, but missing data stays null
+        dxy: macroData?.dxy != null ? macroData.dxy : null,
         dxyTrend: macroData?.dxyTrend || 'neutral',
         interestRateExpectation: macroData?.interestRateExpectation || 'neutral',
         globalLiquidityTrend: macroData?.globalLiquidityTrend || 'neutral',
