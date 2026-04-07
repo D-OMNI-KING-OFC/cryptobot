@@ -2,6 +2,7 @@
   "name": "cryptobot",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "concurrently \"npm run server\" \"npm run client\"",
     "client": "vite --port 5000 --host 0.0.0.0",
