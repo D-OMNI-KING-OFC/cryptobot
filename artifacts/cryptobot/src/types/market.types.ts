@@ -47,7 +47,7 @@ export interface MacroSentimentData {
   btcDominance: number;
   totalMarketCap: number;
   total2MarketCap: number;
-  dxy: number;
+  dxy: number | null;
   dxyTrend: 'rising' | 'falling' | 'neutral';
   interestRateExpectation: 'hawkish' | 'neutral' | 'dovish';
   globalLiquidityTrend: 'expanding' | 'contracting' | 'neutral';

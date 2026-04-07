@@ -586,10 +586,14 @@ export function useAnalysisEngine() {
       const oi = oiDataRes.status === 'fulfilled' ? oiDataRes.value : { oi: null, change24h: 0 };
       const lsRatio = lsRatioRes.status === 'fulfilled' ? lsRatioRes.value : null;
       const oiChange24h = oiChange24hRes.status === 'fulfilled' ? oiChange24hRes.value : 0;
-      // ETF flows from Farside Investors (BTC/ETH only; null for other assets)
+      // ETF data: Farside (exact $ flows) or Yahoo Finance proxy (activity signal)
       const etfFlowData = etfFlowRes.status === 'fulfilled' ? etfFlowRes.value : null;
-      const etfNetFlow24h: number | null = etfFlowData?.btcFlows?.daily ?? null;
-      const etfNetFlowWeekly: number | null = etfFlowData?.btcFlows?.weekly ?? null;
+      const etfSource = etfFlowData?.btcFlows?.source;
+      // Only use dollar amounts when we have real Farside data; Yahoo Finance proxy is not dollar flows
+      const etfNetFlow24h: number | null = etfSource === 'farside' ? (etfFlowData?.btcFlows?.daily ?? null) : null;
+      const etfNetFlowWeekly: number | null = etfSource === 'farside' ? (etfFlowData?.btcFlows?.weekly ?? null) : null;
+      // Store full ETF activity data for the prompt (Yahoo Finance provides signal, not flows)
+      const etfActivityData = etfSource === 'yahoo_finance_etf_proxy' ? etfFlowData.btcFlows : null;
 
       store.setPhaseProgress('phase2', 'complete');
 
@@ -756,8 +760,10 @@ export function useAnalysisEngine() {
         // sopr: null means the metric is unavailable on this data tier — Claude will see it as such
         sopr: onChainData ? (onChainData.sopr !== undefined ? onChainData.sopr : null) : null,
         nvtRatio: onChainData?.nvtRatio,
-        etfNetFlow24h: onChainData?.etfNetFlow24h,
-        etfNetFlowWeekly: onChainData?.etfNetFlowWeekly,
+        // ETF flows: from Farside Investors (Phase 2 fetch above), NOT from onChain API
+        // onChain.ts never populates ETF flows — that data comes from the separate etfFlowRes
+        etfNetFlow24h: etfNetFlow24h,
+        etfNetFlowWeekly: etfNetFlowWeekly,
         tokenUnlockWarning: onChainData?.tokenUnlockWarning,
         technicalByTimeframe: {
           '15m': ind15m,
@@ -805,6 +811,9 @@ export function useAnalysisEngine() {
 
           // Liquidity Analysis
           liquidityAnalysis,
+
+          // ETF Institutional Activity (Yahoo Finance proxy when Farside unavailable)
+          etfActivity: etfActivityData,
 
           // Statistical Significance
           statisticalSignificance: {

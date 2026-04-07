@@ -218,7 +218,7 @@ Apply these common sense overrides:
 
 **"Funding rate >0.08% + signalling LONG in crowd direction"** → Flag prominently: "Entering crowded trade. Liquidation cascade risk elevated. Conservative position sizing mandatory."
 
-**"MTF score passes threshold but only 2 phases agree"** → NO TRADE. Threshold necessary but not sufficient. Need minimum 3/4 phase agreement.
+**"MTF score passes threshold but only 2 phases agree"** → CONDITIONAL. 2/4 is the MINIMUM floor, not an automatic NO TRADE. Apply -10 confidence penalty, require R:R >2.5, and demand a specific, clean entry trigger. If no exceptional trigger exists, THEN it becomes NO TRADE. If setup is genuinely exceptional, signal with explicit 2/4 alignment warning and reduced size note.
 
 **"Distant level (40%+ away) cited as target"** → Frame as long-term structural reference, not near-term trade target.
 
@@ -437,7 +437,7 @@ Current Price: ${formatUSD(data.price)}
 24h Volume: ${data.volume24h != null ? formatUSD(data.volume24h) : 'N/A'}
 
 ## DERIVATIVES
-Funding Rate: ${data.fundingRate != null ? (safeNum(data.fundingRate) * 100).toFixed(4) + '%' : 'N/A'} (${safe(data.fundingRateStatus)})
+Funding Rate: ${data.fundingRate != null ? `${(safeNum(data.fundingRate) * 100).toFixed(4)}% (${safe(data.fundingRateStatus)})` : 'UNAVAILABLE (Binance FAPI geo-blocked — do not assume neutral; treat as unknown; no data gap penalty applies to funding rate specifically)'}
 Open Interest: ${(() => {
   const oiVal = safeNum(data.openInterest, 0);
   // A legitimate perpetual OI for any major asset is at minimum $100M.
@@ -447,11 +447,11 @@ Open Interest: ${(() => {
   }
   return '$' + (oiVal / 1e9).toFixed(2) + 'B (' + safe(data.oiChange24h, '0') + '% 24h change)';
 })()}
-Long/Short Ratio: ${safe(data.longShortRatio)}
+Long/Short Ratio: ${data.longShortRatio != null ? data.longShortRatio : 'UNAVAILABLE (Binance geo-blocked — do not treat as balanced 1.0)'}
 Estimated Liquidation Levels: ${safe(data.liquidationLevels)}
 
 ## MACRO & SENTIMENT
-DXY: ${safe(data.dxy)} (${safe(data.dxyTrend)})
+DXY: ${data.dxy != null ? `${data.dxy} (${safe(data.dxyTrend)}) — apply Phase 1 DXY rules as normal` : 'UNAVAILABLE — DXY data source failed; use Global Liquidity Trend below as macro proxy; do not penalise confidence specifically for DXY absence'}
 Interest Rate Expectation: ${safe(data.interestRateExpectation)}
 Global Liquidity Trend: ${safe(data.globalLiquidityTrend)}
 BTC Dominance: ${safe(data.btcDominance)}%
@@ -471,8 +471,21 @@ Whale Behavior: ${safe(data.whaleBehavior)}
 MVRV Ratio: ${safe(data.mvrv)} (>3.5 = overvalued, <1 = undervalued)
 SOPR: ${data.sopr != null ? data.sopr : 'Unavailable on current data tier'} (>1 = selling at profit, <1 = selling at loss)
 NVT Ratio: ${safe(data.nvtRatio)}
-${data.etfNetFlow24h != null ? `Spot ETF Net Flow (24h): $${data.etfNetFlow24h}M` : 'ETF Flow: N/A'}
-${data.etfNetFlowWeekly != null ? `Spot ETF Net Flow (weekly): $${data.etfNetFlowWeekly}M` : ''}
+${(() => {
+  const ea = data.advancedAnalytics?.etfActivity;
+  if (data.etfNetFlow24h != null) {
+    // Exact dollar flows from Farside
+    return `Spot ETF Net Flow (24h): $${data.etfNetFlow24h}M` +
+      (data.etfNetFlowWeekly != null ? `\nSpot ETF Net Flow (weekly): $${data.etfNetFlowWeekly}M` : '');
+  } else if (ea?.etfDetails?.length) {
+    // Yahoo Finance proxy: price+volume signal from IBIT/FBTC/GBTC
+    const details = ea.etfDetails.map(e =>
+      `${e.symbol}: ${e.priceChange1d > 0 ? '+' : ''}${e.priceChange1d}% (vol ${e.volumeRatio}x avg, ${e.activityLevel})`
+    ).join(', ');
+    return `Spot ETF Institutional Activity (proxy, not exact flows): ${ea.activitySignal}\n  ${details}\n  NOTE: This is a price/volume signal from IBIT/FBTC/GBTC. Use directionally — elevated volume + positive price = demand; elevated volume + negative price = distribution.`;
+  }
+  return 'ETF Flow: N/A (no free data source currently available)';
+})()}
 ${data.tokenUnlockWarning ? `⚠ TOKEN UNLOCK WARNING: Date ${data.tokenUnlockWarning.date} | Amount $${data.tokenUnlockWarning.amountUSD}M | ${data.tokenUnlockWarning.percentOfCirculating}% of circulating supply` : 'Token Unlock Risk: None within 30 days'}
 
 PHASE 2 DETERMINISTIC RULES:
@@ -506,16 +519,9 @@ Fair Value Gaps: ${JSON.stringify(data.fvgZones || [])}
 Order Blocks: ${JSON.stringify(data.orderBlocks || [])}
 Liquidity Sweeps: ${JSON.stringify(data.liquiditySweeps || [])}
 
-## MTF CONFLUENCE SCORE
-${safe(data.mtfConfluenceScore, 0)} (range: -1.0 = strong bearish to +1.0 = strong bullish)
-THRESHOLD INTERPRETATION: |score| >= 0.3 passes minimum confluence gate and allows trade evaluation. |score| < 0.3 forces NO_TRADE due to insufficient directional alignment.
-Current status: ${Math.abs(safeNum(data.mtfConfluenceScore, 0)) >= 0.3 ? 'PASSES threshold — evaluate other conditions' : 'FAILS threshold — insufficient confluence'}
-Interpretation: ${
-  safeNum(data.mtfConfluenceScore) > 0.5 ? 'Strong bullish confluence' :
-  safeNum(data.mtfConfluenceScore) > 0.2 ? 'Moderate bullish' :
-  safeNum(data.mtfConfluenceScore) > -0.2 ? 'Neutral — no trade bias' :
-  safeNum(data.mtfConfluenceScore) > -0.5 ? 'Moderate bearish' : 'Strong bearish confluence'
-}
+## MTF CONFLUENCE SCORE (PRE-COMPUTED REFERENCE — CONTEXT ONLY, DO NOT ADOPT)
+Chart momentum reference value: ${safeNum(data.mtfConfluenceScore, 0).toFixed(2)} (range: -1.0 = strong bearish to +1.0 = strong bullish)
+This is a mechanical indicator of chart momentum only, computed BEFORE your phase analysis. It does NOT know about macro, fundamentals, or your phase outputs. You MUST compute your own mtfConfluenceScore in your output using the weighted formula in the system prompt, based on your completed Phase 1–4 analysis. Do not anchor to this reference value when determining whether to signal or when scoring your output.
 
 ## FIBONACCI LEVELS
 ${JSON.stringify(fib, null, 2)}

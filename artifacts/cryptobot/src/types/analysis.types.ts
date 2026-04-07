@@ -41,9 +41,9 @@ export interface MarketDataPayload {
   fundingRateStatus: 'neutral' | 'overheated_long' | 'overheated_short' | 'unavailable';
   openInterest: number | null;
   oiChange24h: number;
-  longShortRatio: number;
+  longShortRatio: number | null;
   liquidationLevels: string;
-  dxy: number;
+  dxy: number | null;
   dxyTrend: string;
   interestRateExpectation: string;
   globalLiquidityTrend: string;
@@ -63,8 +63,8 @@ export interface MarketDataPayload {
   mvrv: number;
   sopr: number | null;
   nvtRatio?: number;
-  etfNetFlow24h?: number;
-  etfNetFlowWeekly?: number;
+  etfNetFlow24h?: number | null;
+  etfNetFlowWeekly?: number | null;
   tokenUnlockWarning?: {
     date: string;
     amountUSD: number;
@@ -101,6 +101,7 @@ export interface MarketDataPayload {
     hodlWaves?: unknown;
     networkHealth?: unknown;
     liquidityAnalysis?: unknown;
+    etfActivity?: unknown;
     statisticalSignificance?: {
       signalZScore: number;
       confidenceInterval: string;

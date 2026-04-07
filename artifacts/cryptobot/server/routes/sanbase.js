@@ -207,8 +207,74 @@ router.get('/sanbase/onchain/:symbol', async (req, res) => {
       source: 'sanbase',
     });
   } catch (err) {
-    console.warn('Sanbase on-chain error:', err.message);
-    res.status(502).json({ error: err.message });
+    console.warn('Sanbase on-chain error — attempting CoinMetrics Community fallback:', err.message);
+
+    // Fallback: CoinMetrics Community API (free, no key required)
+    // Provides basic on-chain metrics for major assets
+    const COINMETRICS_ASSET_MAP = {
+      bitcoin: 'btc', ethereum: 'eth', solana: 'sol', bnb: 'bnb',
+      xrp: 'xrp', cardano: 'ada', avalanche: 'avax', polkadot: 'dot',
+      chainlink: 'link', 'matic-network': 'matic', litecoin: 'ltc',
+      dogecoin: 'doge', tron: 'trx', toncoin: 'ton',
+    };
+    const cmAsset = COINMETRICS_ASSET_MAP[slug] || null;
+
+    if (cmAsset) {
+      try {
+        const cmUrl = `https://community-api.coinmetrics.io/v4/timeseries/asset-metrics?assets=${cmAsset}&metrics=CapMVRVCur,NVTAdj,AdrActCnt&frequency=1d&page_size=14`;
+        const cmRes = await fetch(cmUrl, { signal: AbortSignal.timeout(10000) });
+        if (cmRes.ok) {
+          const cmData = await cmRes.json();
+          const series = cmData?.data || [];
+          if (series.length > 0) {
+            const latest = series[series.length - 1];
+            const prev = series.length > 1 ? series[series.length - 2] : null;
+
+            const mvrv = latest.CapMVRVCur ? parseFloat(parseFloat(latest.CapMVRVCur).toFixed(3)) : 1.0;
+            const nvtRatio = latest.NVTAdj ? parseFloat(parseFloat(latest.NVTAdj).toFixed(2)) : 60;
+
+            // Active address trend as whale behavior proxy
+            const currAddr = latest.AdrActCnt ? parseFloat(latest.AdrActCnt) : null;
+            const prevAddr = prev?.AdrActCnt ? parseFloat(prev.AdrActCnt) : null;
+            let whaleBehavior = 'neutral';
+            if (currAddr && prevAddr && prevAddr > 0) {
+              const addrChange = (currAddr - prevAddr) / prevAddr;
+              if (addrChange > 0.05) whaleBehavior = 'accumulating';
+              else if (addrChange < -0.05) whaleBehavior = 'distributing';
+            }
+
+            console.log(`CoinMetrics fallback succeeded for ${cmAsset}: MVRV=${mvrv}, NVT=${nvtRatio}`);
+            return res.status(200).json({
+              exchangeNetFlow: 0,
+              exchangeReserves: 0,
+              exchangeReservesTrend: 'neutral',
+              mvrv,
+              sopr: null,
+              nvtRatio,
+              whaleBehavior,
+              source: 'coinmetrics_community',
+            });
+          }
+        }
+      } catch (cmErr) {
+        console.warn('CoinMetrics fallback also failed:', cmErr.message);
+      }
+    }
+
+    // All sources failed — return minimal neutral data (not 502)
+    // The analysis engine treats on-chain as null when this errors, so return a
+    // safe partial response that won't crash the pipeline
+    res.status(200).json({
+      exchangeNetFlow: 0,
+      exchangeReserves: 0,
+      exchangeReservesTrend: 'neutral',
+      mvrv: 1.0,
+      sopr: null,
+      nvtRatio: null,
+      whaleBehavior: 'neutral',
+      source: 'fallback_minimal',
+      warning: 'Sanbase and CoinMetrics both unavailable — data is minimal placeholder',
+    });
   }
 });
 

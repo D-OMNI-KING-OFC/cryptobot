@@ -144,62 +144,92 @@ router.get('/dxy', async (req, res) => {
   res.json({ value: null, trend: 'neutral', source: 'unavailable' });
 });
 
-// GET /api/etf/flows — BTC Spot ETF net flows from Farside Investors (free, no key)
-// Returns: { btcFlows: { daily: number|null, weekly: number|null }, ethFlows: { daily: number|null }, source: string }
+// GET /api/etf/flows — BTC Spot ETF activity signal using Yahoo Finance data
+// Sources: IBIT (BlackRock), FBTC (Fidelity), GBTC (Grayscale) price/volume
+// Computes: volume trend vs 10-day avg, price momentum, NAV proxy
+// Note: This is an institutional activity SIGNAL, not exact net flows (which require paid APIs)
 router.get('/etf/flows', async (req, res) => {
-  try {
-    // Farside Investors provides BTC ETF flow data in CSV format
-    const r = await fetch('https://farside.co.uk/bitcoin-etf-flow-all-data.csv', {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; CryptoBot/2.0)',
-        'Accept': 'text/csv, text/plain, */*',
-        'Referer': 'https://farside.co.uk/',
-      },
-      signal: AbortSignal.timeout(12000),
-    });
+  const ETF_TICKERS = [
+    { symbol: 'IBIT', name: 'BlackRock Bitcoin ETF' },
+    { symbol: 'FBTC', name: 'Fidelity Bitcoin ETF' },
+    { symbol: 'GBTC', name: 'Grayscale Bitcoin Trust' },
+  ];
 
-    if (!r.ok) throw new Error(`Farside HTTP ${r.status}`);
-    const csv = await r.text();
-    const lines = csv.trim().split('\n').filter(l => l.trim());
+  const results = await Promise.allSettled(
+    ETF_TICKERS.map(async ({ symbol, name }) => {
+      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=14d`;
+      const r = await fetch(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Accept': 'application/json',
+        },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!r.ok) throw new Error(`Yahoo Finance HTTP ${r.status} for ${symbol}`);
+      const data = await r.json();
+      const result = data.chart?.result?.[0];
+      if (!result) throw new Error(`No chart data for ${symbol}`);
 
-    if (lines.length < 3) throw new Error('Insufficient CSV data');
+      const meta = result.meta;
+      const closes = result.indicators?.quote?.[0]?.close?.filter(v => v != null) || [];
+      const volumes = result.indicators?.quote?.[0]?.volume?.filter(v => v != null) || [];
 
-    // Parse last 7 data rows for weekly total
-    const dataLines = lines.slice(1); // skip header
+      if (closes.length < 3) throw new Error(`Insufficient data for ${symbol}`);
 
-    let dailyFlow = null;
-    let weeklyFlow = 0;
-    let validDays = 0;
+      const latestClose = closes[closes.length - 1];
+      const prevClose = closes[closes.length - 2];
+      const pricePct = ((latestClose - prevClose) / prevClose) * 100;
 
-    // Parse from end (most recent first)
-    for (let i = dataLines.length - 1; i >= Math.max(0, dataLines.length - 7); i--) {
-      const cols = dataLines[i].split(',').map(c => c.trim().replace(/['"]/g, ''));
-      // Last column is typically the total; find total column
-      // Format: Date, GBTC, FBTC, BITB, ARKB, BTCO, HODL, BRRR, BTCW, IBIT, EZBC, TOTAL
-      const totalCol = cols[cols.length - 1];
-      const val = parseFloat(totalCol);
-      if (!isNaN(val)) {
-        if (dailyFlow === null) dailyFlow = val; // Most recent day
-        weeklyFlow += val;
-        validDays++;
-      }
-    }
+      // Volume signal: today vs 10-day average
+      const recentVols = volumes.slice(-10);
+      const avgVol = recentVols.slice(0, -1).reduce((a, b) => a + b, 0) / Math.max(1, recentVols.length - 1);
+      const todayVol = volumes[volumes.length - 1];
+      const volRatio = avgVol > 0 ? todayVol / avgVol : 1;
 
-    if (validDays === 0) throw new Error('No valid flow data parsed');
+      return {
+        symbol,
+        name,
+        price: parseFloat(latestClose.toFixed(2)),
+        priceChange1d: parseFloat(pricePct.toFixed(2)),
+        volumeRatio: parseFloat(volRatio.toFixed(2)),
+        activityLevel: volRatio > 2.0 ? 'extreme' : volRatio > 1.5 ? 'elevated' : volRatio > 0.7 ? 'normal' : 'low',
+        signal: volRatio > 1.5 && pricePct > 0 ? 'bullish_inflow'
+              : volRatio > 1.5 && pricePct < 0 ? 'bearish_outflow'
+              : 'neutral',
+      };
+    })
+  );
 
-    res.json({
-      btcFlows: {
-        daily: dailyFlow,
-        weekly: parseFloat(weeklyFlow.toFixed(2)),
-        source: 'farside',
-        note: 'USD millions',
-      },
-    });
-  } catch (err) {
-    console.warn('ETF flow fetch failed:', err.message);
-    // Try CoinGecko as fallback (limited ETF data)
-    res.json({ btcFlows: null, source: 'unavailable', error: err.message });
+  const validEtfs = results
+    .filter(r => r.status === 'fulfilled')
+    .map(r => r.value);
+
+  if (validEtfs.length === 0) {
+    return res.json({ btcFlows: null, source: 'unavailable', error: 'All ETF data fetches failed' });
   }
+
+  // Aggregate signal across ETFs
+  const bullishCount = validEtfs.filter(e => e.signal === 'bullish_inflow').length;
+  const bearishCount = validEtfs.filter(e => e.signal === 'bearish_outflow').length;
+  const avgPriceChange = validEtfs.reduce((sum, e) => sum + e.priceChange1d, 0) / validEtfs.length;
+  const avgVolRatio = validEtfs.reduce((sum, e) => sum + e.volumeRatio, 0) / validEtfs.length;
+
+  const aggregateSignal = bullishCount > bearishCount ? 'net_inflow_signal'
+    : bearishCount > bullishCount ? 'net_outflow_signal'
+    : 'neutral';
+
+  res.json({
+    btcFlows: {
+      // Use a synthetic flow estimate: elevated volume × price direction × reference AUM proxy
+      // Positive = institutional demand, Negative = institutional selling
+      daily: parseFloat((avgPriceChange * avgVolRatio * 50).toFixed(2)),  // synthetic signal score
+      weekly: null,  // Weekly exact flows require Farside/paid APIs
+      activitySignal: aggregateSignal,
+      etfDetails: validEtfs,
+      source: 'yahoo_finance_etf_proxy',
+      note: 'Synthetic signal from IBIT/FBTC/GBTC price+volume — not exact net flows. Positive = bullish institutional activity, negative = bearish.',
+    },
+  });
 });
 
 // GET /api/binance/klines — OHLCV via Kraken (Binance geo-blocked)

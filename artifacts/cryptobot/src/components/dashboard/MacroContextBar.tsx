@@ -27,7 +27,7 @@ export function MacroContextBar() {
     <div className="h-10 bg-surface border-b border-border flex items-center px-4 gap-4 overflow-x-auto whitespace-nowrap text-xs font-mono shrink-0">
       <div className="flex items-center gap-1.5">
         <span className="text-text-secondary">DXY</span>
-        <span className="text-text-primary font-semibold">{macroData.dxy.toFixed(2)}</span>
+        <span className="text-text-primary font-semibold">{macroData.dxy != null ? macroData.dxy.toFixed(2) : 'N/A'}</span>
         <TrendIcon trend={macroData.dxyTrend} />
       </div>
       <div className="w-px h-4 bg-border" />

@@ -6,7 +6,7 @@ A production-grade, institutional-style cryptocurrency analysis system. Ingests 
 ## Architecture
 - **Frontend**: React 18 + TypeScript + Tailwind CSS + shadcn-style components
 - **Backend**: Node.js + Express (API proxy on port 3001)
-- **AI Engine**: Anthropic Claude API (`claude-3-5-sonnet-20241022`) via server-side proxy
+- **AI Engine**: Anthropic Claude API (`claude-sonnet-4-20250514`) via server-side proxy
 - **State Management**: Zustand with localStorage persistence
 - **Data Fetching**: TanStack React Query with auto-refresh
 - **Charts**: Lightweight Charts (TradingView) + Recharts
@@ -16,26 +16,27 @@ A production-grade, institutional-style cryptocurrency analysis system. Ingests 
 - Backend (Express): port **3001** (host: localhost)
 - Vite proxies `/api/*` requests to `localhost:3001`
 
-## Data Sources
-- **OHLCV / Candles**: Kraken public REST API (via `/api/binance/klines` server proxy — Binance is geo-blocked on Replit)
-- **Market Overview**: CoinGecko API (top 20 assets, Fear & Greed via alternative.me)
-- **Macro**: FRED API (DXY, interest rates)
-- **Social Sentiment**: LunarCrush (with Sanbase fallback; both return neutral if API tiers insufficient)
-- **On-Chain**: Sanbase GraphQL (MVRV, SOPR, NVT, exchange flows, whale behavior)
-- **Derivatives**: Binance Futures fapi (geo-blocked on Replit — returns graceful defaults)
+## Data Sources (Current — All Free, No Key Required Unless Noted)
+- **OHLCV / Candles**: Kraken public REST API (via `/api/binance/klines` server proxy)
+- **Market Overview**: CoinGecko free API (Fear & Greed via alternative.me)
+- **DXY (Dollar Index)**: Frankfurter.app FX rates → DXY formula computation (no key needed); FRED as primary if key set
+- **News Headlines**: 3-source RSS aggregator — CoinTelegraph, Decrypt, CoinDesk (no key required)
+- **ETF Activity**: Yahoo Finance proxy via IBIT/FBTC/GBTC price+volume signal (replaces Farside — now Cloudflare-blocked)
+- **On-Chain**: Sanbase GraphQL (MVRV, SOPR, NVT, exchange flows, whale behavior); CoinMetrics Community API as fallback; minimal neutral fallback if both fail
+- **Derivatives**: Binance FAPI (geo-blocked on Replit) → returns `null` correctly; do not assume neutral
 
-## Known Geo-Restrictions (Replit Environment)
+## Geo-Restrictions on Replit (Handled Gracefully)
 - `api.binance.com` — HTTP 451 (spot data geo-blocked)
-- `fapi.binance.com` — geo-blocked (futures: funding rate, OI history)
-- **Workaround**: OHLCV is sourced from Kraken instead; derivatives show neutral defaults
+- `fapi.binance.com` — geo-blocked (funding rate, OI, long/short ratio)
+  - All three return `null` explicitly (NOT fake neutral defaults like 0.0001 or 1.0)
+  - Prompt instructs Claude not to penalise confidence for these specific gaps
+- `farside.co.uk` — Cloudflare-blocked; replaced with Yahoo Finance ETF proxy
+- **OHLCV/correlations**: Sourced from Kraken instead of Binance
 
-## API Keys (set as Replit secrets / environment variables)
-- `ANTHROPIC_API_KEY` — Claude AI analysis engine
-- `COINGECKO_API_KEY` — CoinGecko market data
-- `FRED_API_KEY` — FRED macro data
-- `ALCHEMY_API_KEY` — Alchemy on-chain (reserved for future use)
-- `LUNARCRUSH_API_KEY` — LunarCrush social data
-- `SANBASE_API_KEY` — Sanbase on-chain metrics
+## API Keys
+- `ANTHROPIC_API_KEY` — **Required** — Claude AI analysis engine
+- `SANBASE_API_KEY` — Optional — Enhanced on-chain metrics (MVRV, SOPR, whale flows)
+- `FRED_API_KEY` — Optional — FRED DXY/rates (falls back to Frankfurter FX if absent)
 
 ## Project Structure
 ```
@@ -43,65 +44,75 @@ A production-grade, institutional-style cryptocurrency analysis system. Ingests 
   /api            — API client functions (marketData, sentiment, onChain, macro, aiEngine)
   /components
     /analysis     — AnalysisTrigger, PhaseProgressTracker, SignalReport
-    /charts       — PriceChart, OIFundingChart (new)
-    /metrics      — DerivativesPanel, OnChainPanel, TokenomicsAlert (new)
-    /layout       — Sidebar, Header, etc.
+    /charts       — PriceChart, OIFundingChart
+    /metrics      — DerivativesPanel, OnChainPanel, TokenomicsAlert
+    /layout       — Sidebar, Header, MacroContextBar
   /pages          — Dashboard, Analyze, History, Settings
   /store          — Zustand stores (market, analysis, settings)
-  /hooks          — useMarketData, useAnalysisEngine, useOnChainData (new)
+  /hooks          — useMarketData, useAnalysisEngine, useOnChainData
   /types          — TypeScript interfaces (market.types, signal.types, analysis.types)
-  /utils          — formatters, confluenceScorer, signalValidator
+  /utils          — formatters, confluenceScorer, signalValidator, advancedAnalytics
 /server
   app.js          — Express app setup
   index.js        — Dev entry point
   /routes
     aiProxy.js    — Claude API proxy (full 5-phase prompt, buildAnalysisPrompt)
-    proxy.js      — Market data proxies (Kraken OHLCV, FRED, news, Binance fapi fallbacks)
-    sanbase.js    — Sanbase GraphQL (MVRV, SOPR, NVT, exchange flows)
-    lunarcrush.js — LunarCrush social sentiment (v4 API)
+    proxy.js      — Market data proxies (Kraken, Frankfurter DXY, RSS news, ETF via Yahoo Finance)
+    sanbase.js    — Sanbase GraphQL with CoinMetrics Community API fallback
+    advanced.js   — Deribit options + orderbook analytics
 ```
 
 ## Analysis Engine — 5 Phases
-1. **Phase 1**: Macro & Sentiment — DXY, FRED rates, Fear & Greed, global liquidity
-2. **Phase 2**: On-Chain & Fundamentals — Exchange flows, MVRV, SOPR, NVT, whale behavior, ETF flows, token unlocks
+1. **Phase 1**: Macro & Sentiment — DXY (Frankfurter), FRED rates, Fear & Greed, global liquidity
+2. **Phase 2**: On-Chain & Fundamentals — Exchange flows, MVRV, SOPR, NVT, whale behavior, ETF activity (Yahoo Finance IBIT/FBTC/GBTC proxy), token unlocks
 3. **Phase 3**: HTF Technical (1D, 1W) — EMA stack, volume profile, Fibonacci, HVNs
-4. **Phase 4**: LTF Technical (15m, 1H, 4H) — BOS/CHOCH, FVGs, Order Blocks, liquidity sweeps, StochRSI, true MACD signal line
+4. **Phase 4**: LTF Technical (15m, 1H, 4H) — BOS/CHOCH, FVGs, Order Blocks, liquidity sweeps, StochRSI, MACD
 5. **Phase 5**: Synthesis — MTF confluence score, penalty rules, Claude generates JSON signal
 
+## Signal Validator Calibration (Master Prompt Spec)
+- `phaseAlignmentMinimum`: 2 (not 3 — prevents over-filtering at medium confluence)
+- MTF threshold: `< 0.3` (not `<= 0.3` — allows exactly 0.3 to pass)
+- Funding rate crowded threshold: `0.0005` (0.05%) per master prompt spec
+- 2-phase signals: CONDITIONAL (human review required), NOT automatic NO_TRADE
+- Claude computes its own MTF score (pre-computed score is "reference only, do not adopt" — removes anchoring bias)
+
+## AI Prompt Design (aiProxy.js)
+- **BALANCE CALIBRATION**: "Not too strict, not too loose" human-judgment philosophy
+- **Data gap handling**: Missing data shown with explicit instructional context (not just "N/A")
+- **Null values**: DXY null → "use Global Liquidity as proxy"; funding null → "do not assume neutral"; LS ratio null → "do not treat as balanced 1.0"
+- **Anti-boilerplate**: Each asset's noTradeReason must be unique
+- **Phase count enforcement**: Claude counts phases after completing all four biases
+- Output format: strict JSON only, no prose outside schema
+
 ## Technical Indicators (computed in `useAnalysisEngine.ts`)
-- **RSI** — 14-period
-- **MACD** — EMA12/26 with real 9-period EMA signal line (not approximation)
-- **StochRSI** — Full Stochastic RSI (k=3, d=3 smooth)
-- **Bollinger Bands** — 20-period, 2σ
-- **ATR** — 14-period Average True Range
-- **VWAP** — Volume-weighted average price
-- **EMA 20/50/200** — Multi-timeframe EMA stack
-- **Volume Profile** — POC, VAH, VAL, top-5 HVNs (50-bucket)
-- **Fibonacci Levels** — Retracements (0.236–0.786) + Extensions (1.0–2.618)
-- **Correlations** — 30-day Pearson vs BTC and ETH
+- RSI (14-period), MACD (EMA12/26 + real 9-period EMA signal line), StochRSI (k=3, d=3)
+- Bollinger Bands (20-period, 2σ), ATR (14-period), VWAP
+- EMA 20/50/200, Volume Profile (POC/VAH/VAL, top-5 HVNs, 50-bucket)
+- Fibonacci Retracements (0.236–0.786) + Extensions (1.0–2.618)
+- Correlations: 30-day Pearson vs BTC and ETH (via Kraken proxy)
 
 ## Market Structure Detection
-- **BOS** (Break of Structure) — 10-candle lookback, bidirectional
-- **CHOCH** (Change of Character) — trend reversal detection
-- **FVGs** — Fair Value Gaps (3-candle imbalance zones)
-- **Order Blocks** — Demand/supply zones with momentum confirmation
-- **Liquidity Sweeps** — Wick-through + close-inside pattern
+- BOS (Break of Structure) — 10-candle lookback, bidirectional
+- CHOCH (Change of Character) — trend reversal detection
+- FVGs — Fair Value Gaps (3-candle imbalance zones)
+- Order Blocks — Demand/supply zones with momentum confirmation
+- Liquidity Sweeps — Wick-through + close-inside pattern
 
-## Claude Prompt Rules (aiProxy.js)
-- Mandatory confidence penalty rules applied before signal output
-- Force NO_TRADE if: R:R < 1:2, confidence < 55, |MTF score| < 0.3, funding > 0.1%+rising DXY
-- Output format: strict JSON only, no prose outside schema
+## Key Audit Fixes Applied
+1. DXY: FRED → Frankfurter FX formula fallback (correct computation of DXY from 6 FX pairs)
+2. News: Single-source CoinGecko → 3-source RSS (CoinTelegraph + Decrypt + CoinDesk)
+3. Funding rate: Was returning fake 0.0001 → now returns `null` when geo-blocked
+4. Long/Short ratio: Was returning fake 1.0 → now returns `null` when geo-blocked
+5. DXY type: Was `number` → `number | null` in TypeScript types + null-safe UI rendering
+6. Long/Short type: `number` → `number | null` throughout type chain
+7. On-chain: 502 errors → CoinMetrics Community API fallback → minimal neutral fallback
+8. ETF flows: Farside 404 → Yahoo Finance IBIT/FBTC/GBTC activity proxy
+9. Signal validator: phaseAlignmentMinimum 3→2, MTF `<= 0.3`→`< 0.3`, funding threshold corrected
+10. HUMAN JUDGMENT LAYER: 2-phase auto NO_TRADE → CONDITIONAL (human review)
+11. MTF anchoring: Pre-computed score labeled "reference only" in prompt
+12. MacroContextBar: `dxy.toFixed()` null safety fix
 
 ## Development
 ```bash
 npm run dev   # Starts both frontend (port 5000) and backend (port 3001) concurrently
 ```
-
-## Key Features
-1. **5-Phase AI Analysis**: Macro → On-Chain → HTF Technical → LTF Technical → Claude Synthesis
-2. **Signal Validation**: R:R, confidence threshold, MTF confluence enforcement
-3. **Real-time Dashboard**: Live prices, Fear & Greed, BTC dominance, market cap
-4. **OI + Funding Chart**: 24h open interest trend + funding rate history panels
-5. **Tokenomics Alert**: Token unlock risk display with confidence impact warnings
-6. **Signal History**: localStorage persistence, outcome tracking, CSV export
-7. **Bloomberg Terminal aesthetic**: Dark, data-dense UI with Orbitron/Rajdhani/Share Tech Mono fonts

@@ -59,7 +59,11 @@ export async function fetchFundingRate(pair: string): Promise<number | null> {
     const res = await fetchWithRetry(`/api/binance/funding/${symbol}`);
     const data = await res.json();
     if (Array.isArray(data) && data.length > 0) {
-      return parseFloat(data[0].fundingRate);
+      const rate = data[0].fundingRate;
+      // Proxy returns null when Binance is geo-blocked — propagate null, not NaN
+      if (rate === null || rate === undefined) return null;
+      const parsed = parseFloat(rate);
+      return isNaN(parsed) ? null : parsed;
     }
     return null;
   } catch {

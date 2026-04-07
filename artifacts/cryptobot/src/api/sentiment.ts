@@ -175,7 +175,7 @@ export async function fetchMacroSentiment(assetSymbol: string = 'BTC'): Promise<
     btcDominance: gd.btcDominance,
     totalMarketCap: gd.totalMarketCap,
     total2MarketCap: gd.total2MarketCap,
-    dxy: dxy.value as number,  // null is valid here; handled in payload builder
+    dxy: dxy.value,  // null is valid — payload builder converts null → null (not 0)
     dxyTrend: dxy.trend,
     interestRateExpectation: rateExpectation,
     globalLiquidityTrend,
