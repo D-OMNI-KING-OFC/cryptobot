@@ -1,7 +1,5 @@
 import type { OHLCVCandle, MarketAsset } from '../types/market.types';
 
-const COINGECKO_BASE = 'https://api.coingecko.com/api/v3';
-
 const COINGECKO_IDS: Record<string, string> = {
   'BTC': 'bitcoin', 'ETH': 'ethereum', 'SOL': 'solana', 'BNB': 'binancecoin',
   'XRP': 'ripple', 'ADA': 'cardano', 'AVAX': 'avalanche-2', 'DOT': 'polkadot',
@@ -13,11 +11,6 @@ const COINGECKO_IDS: Record<string, string> = {
 const BINANCE_TF_MAP: Record<string, string> = {
   '1m': '1m', '5m': '5m', '15m': '15m', '1H': '1h', '4H': '4h', '1D': '1d', '1W': '1w'
 };
-
-function geckoHeaders(): Record<string, string> {
-  const key = import.meta.env.VITE_COINGECKO_API_KEY;
-  return key ? { 'x-cg-demo-api-key': key } : {};
-}
 
 async function fetchWithRetry(url: string, headers: Record<string, string> = {}, retries = 3): Promise<Response> {
   for (let i = 0; i < retries; i++) {
@@ -95,8 +88,8 @@ export async function fetchOpenInterest(pair: string): Promise<{ oi: number | nu
 
 export async function fetchTop20Assets(): Promise<MarketAsset[]> {
   try {
-    const url = `${COINGECKO_BASE}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=20&page=1&sparkline=false&price_change_percentage=24h`;
-    const res = await fetchWithRetry(url, geckoHeaders());
+    const url = '/api/coingecko/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=20&page=1&sparkline=false&price_change_percentage=24h';
+    const res = await fetchWithRetry(url);
     const data = await res.json();
 
     return data.map((coin: {
@@ -151,8 +144,8 @@ export async function fetchSingleAssetPrice(pair: string): Promise<{ price: numb
   try {
     const symbol = pair.split('/')[0];
     const geckoId = COINGECKO_IDS[symbol] || symbol.toLowerCase();
-    const url = `${COINGECKO_BASE}/simple/price?ids=${geckoId}&vs_currencies=usd&include_24hr_change=true&include_24hr_vol=true`;
-    const res = await fetchWithRetry(url, geckoHeaders());
+    const url = `/api/coingecko/simple/price?ids=${geckoId}&vs_currencies=usd&include_24hr_change=true&include_24hr_vol=true`;
+    const res = await fetchWithRetry(url);
     const data = await res.json();
     const coinData = data[geckoId];
     if (coinData) {

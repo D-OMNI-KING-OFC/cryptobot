@@ -1,11 +1,6 @@
 import type { MacroSentimentData, NewsItem } from '../types/market.types';
 import { fetchDXY, fetchInterestRateExpectation } from './macro';
 
-function geckoHeaders(): Record<string, string> {
-  const key = import.meta.env.VITE_COINGECKO_API_KEY;
-  return key ? { 'x-cg-demo-api-key': key } : {};
-}
-
 async function fetchWithRetry(url: string, options: RequestInit = {}, retries = 3): Promise<Response> {
   for (let i = 0; i < retries; i++) {
     try {
@@ -21,8 +16,7 @@ async function fetchWithRetry(url: string, options: RequestInit = {}, retries = 
 }
 
 export async function fetchFearGreedIndex(): Promise<{ value: number; label: string }> {
-  const base = import.meta.env.VITE_ALTERNATIVE_ME_ENDPOINT || 'https://api.alternative.me/fng/';
-  const res = await fetchWithRetry(`${base}?limit=1`);
+  const res = await fetchWithRetry('/api/fear-greed');
   const data = await res.json();
   if (data.data && data.data[0]) {
     return {
@@ -40,7 +34,7 @@ export async function fetchGlobalMarketData(): Promise<{
   total3MarketCap: number;
   dominantNarrative: string;
 }> {
-  const res = await fetchWithRetry('https://api.coingecko.com/api/v3/global', { headers: geckoHeaders() });
+  const res = await fetchWithRetry('/api/coingecko/global');
   const data = await res.json();
   const global = data.data;
   const totalMC = global.total_market_cap?.usd || 0;

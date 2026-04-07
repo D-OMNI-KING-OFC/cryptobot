@@ -12,6 +12,7 @@ app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
 app.use('/api', aiProxy);
+app.use('/api', require('./routes/coingecko'));
 app.use('/api', proxy);
 app.use('/api', sanbase);
 app.use('/api', advanced);
