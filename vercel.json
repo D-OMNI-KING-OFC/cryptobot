@@ -1,5 +1,4 @@
 {
-  "rootDirectory": "artifacts/cryptobot",
   "installCommand": "pnpm install",
   "buildCommand": "pnpm run build",
   "outputDirectory": "dist",
